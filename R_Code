@@ -1,11 +1,12 @@
 
+
 library(tidyverse)
 library(quantmod)
 library(PerformanceAnalytics)
 options(digits=4,scipen = 0)
 
 
-# The symbols
+# The symbols vector holds our tickers. 
 symbols <- c("IBM","NFLX",
              "C","GS","JPM","MS","BAC","DB", #finance
              "AMZN","AAPL","MSFT","GOOGL",#tech
@@ -15,7 +16,7 @@ symbols <- c("IBM","NFLX",
              "KR","TGT","WMT","TJX","TRIP","SBUX","TSCO")#consumer/retail
 
 
-# The prices 
+# The prices object will hold our raw price data throughout this book.
 levels <- list()
 getSymbols(symbols, src = 'yahoo', 
            from = '2010-01-01')
@@ -31,13 +32,9 @@ rm(list=setdiff(ls(), "prices"))
 
 #plot(prices$TSLA)
 
-# The prices monthly
-
 prices_monthly <- to.monthly(prices, indexAt = "last", OHLC = FALSE)
 
 returns_monthly <- na.omit(Return.calculate(prices_monthly, method = "log"))
-
-# The returns monthly
 
 returns_monthly <- returns_monthly[-nrow(returns_monthly),]
 
@@ -51,7 +48,7 @@ momentum_score <- lag.xts(rollapply(ret_mon_p1, width = 12, FUN = prod) -1 )
 momentum_pct_rank <- data.frame(t(apply(-momentum_score, 1, percent_rank))) 
 #%>% na.omit(.)
 
-momentum_pct_rnk_signal <- ifelse(momentum_pct_rank < 0.25 , 1 , 0)
+momentum_pct_rnk_signal <- ifelse(momentum_pct_rank < 0.1 , 1 , 0)
 
 momentum_returns<-momentum_pct_rnk_signal*returns_monthly
 
@@ -69,17 +66,24 @@ charts.PerformanceSummary(momentum_returns_xts$period_total,
                           main="Momentum Cumulative Return Index")
 
 
-strategy_perf<-cbind.data.frame(
+strategy_perf<-rbind.data.frame(
   Return.annualized(momentum_returns_xts$period_total),
   sd.annualized(momentum_returns_xts$period_total),
-  SharpeRatio.annualized(momentum_returns_xts$period_total),
+  #SharpeRatio.annualized(momentum_returns_xts$period_total),
+  AdjustedSharpeRatio(momentum_returns_xts$period_total),
+  SortinoRatio(momentum_returns_xts$period_total),
   skewness(momentum_returns_xts$period_total),
   kurtosis(momentum_returns_xts$period_total),
-  maxDrawdown(momentum_returns_xts$period_total)
-)
+  maxDrawdown(momentum_returns_xts$period_total))
 
-colnames(strategy_perf)<-c("Ret","Risk","Ratio",
-                           "Skewness",
-                           "Kurtosis","MaxDD")
+rownames(strategy_perf)<-c("Ret","Risk","SR","Sortino",
+                              "Skewness",
+                              "Kurtosis","MaxDD")
 
 print(strategy_perf)
+   
+library(gridExtra)
+library(grid)
+grid.table(strategy_perf)
+
+
