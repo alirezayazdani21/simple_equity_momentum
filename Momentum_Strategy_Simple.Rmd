@@ -1,0 +1,175 @@
+---
+title: "A Simple Momentum Strategy with R"
+author: "Al Yazdani"
+date: "2/11/2020"
+output: 
+  word_document: 
+    fig_caption: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## What is Momentum?
+Momentum refers to the tendency of stock prices to continue to rise. Momentum strategy is concerned with buying (going long) stocks with recent price increase and selling (going short) those with price drop. Momentum is widely regarded an anomaly hard to explain by the Efficient Market Hypothesis that argues past prices can’t predict future success.
+
+## Why R?
+R has great tools for the study and analysis of Financial Time Series. in what follows, we use libraries "quantmod" for quantitative financial modelling (Dependencies: R >= 3.2.0, xts >= 0.9-0, zoo, TTR >= 0.2, methods),"PerformanceAnalytics" for Econometric and Risk Analysis (Dependencies: R >= 3.0.0, xts >= 0.10.0) and tidyverse. 
+
+```{r options, results="hide",message=FALSE}
+library(tidyverse)
+library(quantmod)
+library(PerformanceAnalytics)
+options(digits=4,scipen = 0)
+```
+
+We select (somewhat arbitrarily) 30 stocks from different industry sectors in SP500 and pull historical price data. 
+
+```{r symbols, results="hide",message=FALSE}
+#30 stock from different sectors 
+symbols <- c("IBM","NFLX",
+             "C","GS","JPM","MS","BAC","STT", #finance
+             "AMZN","AAPL","MSFT","GOOGL",#tech
+             "PFE","MRK","GSK","NVS",#drugs/bio
+             "BP","CVX","XOM","TOT",#oil&gas
+             "F","GM","TM","HMC","TSLA","TTM",#auto
+             "KR","TGT","WMT","TJX","TRIP",
+             "SBUX","TSCO")#consumer/retail
+
+
+# historical stock prices from Yahoo finance
+levels <- list()
+
+getSymbols(symbols, src = 'yahoo', from = '2010-01-01')
+
+for(i in 1:length(symbols)) {
+  prices <- Ad(get(symbols[i])) #Adjusted prices are more reliable
+  colnames(prices) <- symbols[i]
+  levels[[i]] <- prices
+}
+
+prices<-na.omit(do.call(cbind, levels))
+
+rm(list=setdiff(ls(), "prices"))
+```
+
+
+## Price Plots
+
+It is usually good idea to plot our data.
+
+```{r sbuxplot, echo=FALSE, fig.align='center',out.width = "100%"}
+
+plot(prices$SBUX,col=2,main="SBUX")
+
+```
+
+## Monthly returns
+For this analysis we first convert daily prices to monthly by sampling at the end of each month and then convert prices to returns. 
+
+```{r monthly, message=FALSE, fig.align='center',out.width = "100%"}
+
+prices_monthly <- to.monthly(prices, indexAt = "last", OHLC = FALSE)
+
+returns_monthly <- na.omit(Return.calculate(prices_monthly, method = "log"))
+
+returns_monthly <- returns_monthly[-nrow(returns_monthly),] #removing NAs
+
+plot(returns_monthly$SBUX,col=2,main="SBUX")
+
+```
+
+## Momentum Score
+We first convert net returns to gross returns by adding 1, then multiply gross returns and subtract 1 to find cumulative 12 month net returns. 
+
+```{r momentum_score, message=FALSE}
+
+#net to gross return by adding 1
+ret_mon_p1 <- returns_monthly + 1 
+
+#12-1 momentum score: 
+momentum_score <- lag.xts(rollapply(ret_mon_p1, width = 12, FUN = prod) -1 ) 
+  
+```
+
+## Top decile momentum
+
+We use cross sectional perecent ranking of the momentum score, create a buy signal for the top decile (i.e. high quality momentum), and calculate period total returns from the strategy. 
+
+```{r deciles, message=FALSE}
+
+#percent rank cross-sectional momentum score
+momentum_pct_rank <- data.frame(t(apply(-momentum_score, 1, percent_rank))) 
+
+#creating buy signal for the top decile
+momentum_pct_rnk_signal <- ifelse(momentum_pct_rank < 0.10 , 1 , 0) 
+
+momentum_returns<-momentum_pct_rnk_signal*returns_monthly
+
+period_total<-apply(momentum_returns,1,sum) %>%  as.xts(order.by=index(momentum_returns))
+
+momentum_returns_xts<-cbind.xts(momentum_returns,period_total) %>% na.omit(.)
+
+```
+
+
+## Prformance metrics 
+
+Finally, let's have a look at strategy risk and return performance: 
+
+```{r performance, fig.align='center',out.width = "80%",message=FALSE}
+
+strategy_perf<-rbind.data.frame(
+  Return.annualized(momentum_returns_xts$period_total),
+  sd.annualized(momentum_returns_xts$period_total),
+  SharpeRatio.annualized(momentum_returns_xts$period_total),
+  AdjustedSharpeRatio(momentum_returns_xts$period_total),
+  SortinoRatio(momentum_returns_xts$period_total),
+  skewness(momentum_returns_xts$period_total),
+  kurtosis(momentum_returns_xts$period_total),
+  maxDrawdown(momentum_returns_xts$period_total),
+  VaR(momentum_returns_xts$period_total,p=0.95,method="historical"))
+
+rownames(strategy_perf)<-c("Return",
+                           "Risk",
+                           "Sharpe Ratio",
+                           "Adjusted Sharpe",
+                           "Sortino Ratio",
+                           "Skewness",
+                           "Kurtosis",
+                           "MaxDD",
+                           "VaR")
+
+```
+
+
+```{r performance plots,out.width = "80%",message=FALSE, echo=FALSE}
+#print(strategy_perf)
+library(gridExtra)
+library(grid)
+grid.table(round(strategy_perf,digits=4))
+
+charts.PerformanceSummary(momentum_returns_xts$period_total,
+                          Rb=0,col=4,
+                          main="Momentum Strategy Cumulative Return Index")
+
+chart.RollingPerformance(momentum_returns_xts$period_total,
+                         width=12,FUN="Return.annualized",
+                         main="12M Rolling Return")
+
+chart.RollingPerformance(momentum_returns_xts$period_total,
+                         width=12,FUN="sd.annualized",
+                         main="12M Rolling Risk")
+
+chart.RollingPerformance(momentum_returns_xts$period_total,
+                         width=12,FUN="SharpeRatio.annualized",
+                         main="12M Rolling SR")
+
+```
+
+
+
+
+
+
